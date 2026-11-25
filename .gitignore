@@ -1,0 +1,15 @@
+# runtime state and generated artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+state/
+out/
+*.log
+
+# generated fixtures (regenerate with fixtures/make_fixture.py)
+fixtures/fx2/
+fixtures/fx_gop/
+
+# editor / OS
+.DS_Store
+static.bak-*/

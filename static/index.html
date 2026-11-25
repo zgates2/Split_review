@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>G2 数据审查与子任务切分</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%235b8def'/%3E%3C/svg%3E" />
+<meta http-equiv="Cache-Control" content="no-cache" />
+<!-- the server sends no Cache-Control for /static, so version the assets to avoid stale CSS/JS -->
+<script>document.write('<link rel="stylesheet" href="/static/style.css?v=' + Date.now() + '">');</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo"></span><strong>G2 数据审查</strong></div>
+  <select id="dsSelect" class="input ds-select" title="切换数据集 / 集合"></select>
+  <button id="btnAdd" class="btn">＋ 登记数据集</button>
+
+  <div class="overall" id="overall" title="审查进度">
+    <div class="bar"><i id="overallFill"></i></div>
+    <span id="overallText" class="muted"></span>
+  </div>
+
+  <div class="spacer"></div>
+  <button id="btnTpl" class="btn ghost">子任务模板</button>
+  <button id="btnHelp" class="btn ghost" title="使用说明 (?)">帮助</button>
+  <button id="btnExport" class="btn accent export-btn">
+    <span class="fill" id="exportFill"></span>
+    <span class="label" id="exportLabel">导出子任务数据集</span>
+  </button>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <div class="side-search"><input id="epSearch" class="input" placeholder="搜索 episode…" /></div>
+    <div class="filters" id="filters">
+      <button data-filter="" class="chip active">全部 <b id="cAll">0</b></button>
+      <button data-filter="new" class="chip">未审 <b id="cNew">0</b></button>
+      <button data-filter="done" class="chip">已审 <b id="cDone">0</b></button>
+      <button data-filter="skipped" class="chip">跳过 <b id="cSkipped">0</b></button>
+    </div>
+    <ul id="epList" class="ep-list"></ul>
+  </aside>
+
+  <section class="stage" id="stage">
+    <div class="busy-bar" id="busyBar" hidden></div>
+    <div class="empty" id="empty">
+      <div class="empty-icon">▶</div>
+      <h2 id="emptyTitle">请选择左侧 episode</h2>
+      <p class="muted" id="emptyText">点击左侧列表中的一条开始审查；首次打开需要生成预览，约 5–10 秒。</p>
+      <button id="emptyAdd" class="btn accent" hidden>＋ 登记数据集</button>
+    </div>
+
+    <div class="ep-head" id="epHead" hidden>
+      <div class="ep-title">
+        <strong id="epTitle">episode</strong>
+        <span class="muted" id="epMeta"></span>
+        <span class="badge-dirty" id="dirtyBadge" hidden>● 未保存</span>
+      </div>
+      <div class="ep-tools">
+        <input id="noteInput" class="input note" placeholder="备注（可选）" maxlength="200" />
+        <label class="toggle" title="标记自动吸附到关键帧；GOP 很长时建议关闭"><input type="checkbox" id="chkSnap" /> 吸附关键帧</label>
+        <select id="speedSel" class="input small" title="播放速度">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="3">3×</option>
+        </select>
+        <button id="btnDiscardAll" class="btn ghost danger small">整条丢弃</button>
+      </div>
+    </div>
+
+    <div class="videos" id="videos" hidden></div>
+
+    <div class="transport" id="transport" hidden>
+      <button id="btnPrevFrame" class="btn icon" title="上一帧 (,)">⏮</button>
+      <button id="btnPlay" class="btn icon big" title="播放 / 暂停 (空格)">▶</button>
+      <button id="btnNextFrame" class="btn icon" title="下一帧 (.)">⏭</button>
+      <span class="time" id="timeLabel">0.00 / 0.00 s</span>
+      <span class="time frame" id="frameLabel"></span>
+      <div class="spacer"></div>
+      <button id="btnMark" class="btn accent" title="在当前播放位置打标记 (M)">＋ 在此处切开 (M)</button>
+    </div>
+
+    <div class="timeline" id="timeline" hidden>
+      <div class="tl-inner" id="tlInner">
+        <canvas id="ruler" class="tl-ruler"></canvas>
+        <div class="tl-bands" id="tlBands"></div>
+        <div class="tl-marks" id="tlMarks"></div>
+        <div class="tl-playhead" id="playhead"></div>
+      </div>
+      <div class="tl-hint muted">点击/拖动时间轴定位 · 按 <kbd>M</kbd> 或「在此处切开」打标记 · 拖动标记微调 · 双击标记删除</div>
+    </div>
+
+    <div class="segments-wrap" id="panels" hidden>
+      <div class="seg-head">
+        <strong>子任务分段</strong>
+        <span class="muted" id="segSummary"></span>
+        <span class="spacer"></span>
+        <span class="muted tpl-hint" id="tplHint"></span>
+      </div>
+      <div class="segments" id="segments"></div>
+    </div>
+
+    <div class="footer" id="footer" hidden>
+      <span class="hint">空格 播放 · M 切开 · ←/→ 1s · ,/. 1帧 · D 丢弃当前段 · 1-9 套用模板 · S 保存 · N 保存并下一条 · ? 帮助</span>
+      <div class="footer-btns">
+        <button id="btnPrev" class="btn ghost" title="上一条 ([)">‹ 上一条</button>
+        <button id="btnNext" class="btn ghost" title="下一条 (])">下一条 ›</button>
+        <button id="btnSave" class="btn">保存 (S)</button>
+        <button id="btnSaveNext" class="btn accent">保存并下一条 (N) →</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 子任务模板 -->
+<div class="modal" id="tplModal" hidden>
+  <div class="modal-box">
+    <h3>子任务模板</h3>
+    <p class="muted">每行一个子任务 prompt；第 n 段默认套用第 n 行，审查时按数字键 <kbd>1</kbd>–<kbd>9</kbd> 可快速套用。改动只影响之后的审查，已保存的段不会被覆盖。</p>
+    <textarea id="tplText" rows="8" class="input" placeholder="拿起手机&#10;移动到位&#10;放进盒子&#10;合上盒盖"></textarea>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>取消</button>
+      <button id="tplSave" class="btn accent">保存模板</button>
+    </div>
+  </div>
+</div>
+
+<!-- 登记数据集 -->
+<div class="modal" id="addModal" hidden>
+  <div class="modal-box">
+    <h3>登记数据集</h3>
+    <p class="muted">填一个 LeRobot v3 数据集目录（含 <code>meta/info.json</code>）；或填它的<b>父目录</b>，其下每个数据集会合并成一个「集合」。</p>
+    <input id="dsPath" class="input full" placeholder="/home/zz/wang/data_raw_v3.0" />
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>取消</button>
+      <button id="addGo" class="btn accent">登记</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导出 -->
+<div class="modal" id="expModal" hidden>
+  <div class="modal-box">
+    <h3>导出子任务数据集</h3>
+    <p class="muted" id="expSummary"></p>
+    <label class="field">本次目录名
+      <input id="expName" class="input full" />
+    </label>
+    <label class="field">输出到
+      <input id="expOut" class="input full" />
+    </label>
+    <p class="muted small-note">产物位于 <code id="expPreview"></code>，每个子任务一个独立 v3 数据集，同 prompt 的多条自动归并。只导出「已审」且保留的段。</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>取消</button>
+      <button id="expGo" class="btn accent">开始导出</button>
+    </div>
+  </div>
+</div>
+
+<!-- 帮助 -->
+<div class="modal" id="helpModal" hidden>
+  <div class="modal-box wide">
+    <h3>怎么用（3 分钟看完）</h3>
+    <div class="help-grid">
+      <div>
+        <h4>① 审一条 episode</h4>
+        <ol>
+          <li>左侧点一条。首次打开约 5–10 秒生成预览，之后很快。</li>
+          <li><kbd>空格</kbd> 播放；<kbd>←</kbd><kbd>→</kbd> 前后 1 秒（加 Shift 为 5 秒），<kbd>,</kbd><kbd>.</kbd> 前后 1 帧。</li>
+          <li>看到动作分界，按 <kbd>M</kbd> 或点「在此处切开」。拖动标记微调，双击删除。点击时间轴只会定位，不会误加标记。</li>
+          <li>下方每段选子任务；也可播放到该段后按数字键 <kbd>1</kbd>–<kbd>9</kbd> 套用模板第 n 行。</li>
+          <li>某段没用就点「丢弃」（或按 <kbd>D</kbd>），再点一次恢复；整条都不要点「整条丢弃」，保存后会记为「跳过」。</li>
+          <li><kbd>S</kbd> 保存；<kbd>N</kbd> 保存并跳到下一条未审的；<kbd>[</kbd> <kbd>]</kbd> 不保存直接切换上/下一条。</li>
+        </ol>
+        <p class="muted">k 个标记 = k+1 段。切换 episode 时若有未保存的修改会先询问。</p>
+      </div>
+      <div>
+        <h4>② 模板与数据集</h4>
+        <p>「子任务模板」每行一个子任务，第 1 段默认套第 1 行……每段仍可单独改。</p>
+        <p>「登记数据集」填一个数据集目录，或填父目录自动合并成集合。</p>
+        <h4>③ 导出</h4>
+        <p>点右上「导出子任务数据集」，填本次目录名和输出根目录（浏览器会记住），产物：</p>
+        <pre>&lt;输出到&gt;/&lt;目录名&gt;/
+  task_01_拿起手机/
+  task_02_移动到位/
+  export_report.json</pre>
+        <h4>④ 常见问题</h4>
+        <ul>
+          <li><b>视频黑屏/转圈</b>：预览正在生成，等几秒；失败时画面上有「重试」。</li>
+          <li><b>标记跳不齐</b>：勾了「吸附关键帧」就会吸到刻度上；GOP 很长的数据默认关闭，精确到帧。</li>
+          <li><b>关掉浏览器</b>：结果存在服务端 <code>state/review.db</code>，重开接着审。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn accent" data-close>知道了</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>document.write('<script src="/static/app.js?v=' + Date.now() + '"><\/script>');</script>
+</body>
+</html>
