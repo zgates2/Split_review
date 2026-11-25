@@ -342,6 +342,8 @@ function renderVideos(cameras, index) {
     const cover = el("div", { class: "cover" }, el("div", { class: "spin" }), el("span", { text: "正在生成预览…（首次约 5–10 秒）" }));
     const v = el("video", { muted: true, playsinline: true, preload: "auto" });
     v.muted = true;
+    // load() resets playbackRate to defaultPlaybackRate, so set both.
+    v.defaultPlaybackRate = S.rate;
     v.playbackRate = S.rate;
     const load = () => {
       cover.className = "cover";
@@ -349,7 +351,12 @@ function renderVideos(cameras, index) {
       cover.hidden = false;
       v.src = `/api/media/${S.dsKey}/${index}?camera=${encodeURIComponent(cam)}&_=${Date.now()}`;
     };
-    v.addEventListener("loadeddata", () => { cover.hidden = true; });
+    v.addEventListener("loadeddata", () => {
+      // keep the chosen speed across every (re)load of a new episode
+      v.defaultPlaybackRate = S.rate;
+      v.playbackRate = S.rate;
+      cover.hidden = true;
+    });
     v.addEventListener("error", () => {
       cover.className = "cover err";
       cover.hidden = false;
@@ -859,7 +866,10 @@ function bindEvents() {
   $("btnMark").onclick = () => addMarkAt(S.curTime);
   $("speedSel").onchange = (e) => {
     S.rate = parseFloat(e.target.value);
-    allVideos().forEach((v) => { v.playbackRate = S.rate; });
+    allVideos().forEach((v) => {
+      v.defaultPlaybackRate = S.rate;
+      v.playbackRate = S.rate;
+    });
   };
   $("chkSnap").onchange = (e) => { S.snapOn = e.target.checked; markDirty(); };
   $("noteInput").addEventListener("input", markDirty);
