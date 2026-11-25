@@ -59,7 +59,7 @@ const S = {
   keyframes: [], duration: 0, fps: 30, length: 0,
   snapOn: false, dirty: false, saving: false, note: "",
   playing: false, rate: 1, curTime: 0, stopAt: null, selMark: -1, raf: 0, tok: 0,
-  exporting: false,
+  exporting: false, pfTimer: 0,
 };
 
 const itemKey = (e) => (S.src && S.src.kind === "col" ? e.ord : e.episode_index);
@@ -308,6 +308,28 @@ async function openEpisode(key, force) {
   updateDirty();
   seek(0);
   requestAnimationFrame(drawRuler);
+  prefetchAround();
+}
+
+/* Warm the preview cache for the next episodes while this one is being watched. */
+function prefetchAround() {
+  clearTimeout(S.pfTimer);
+  const cur = itemKey(S.ep);
+  const idx = S.eps.findIndex((e) => itemKey(e) === cur);
+  if (idx < 0) return;
+  S.pfTimer = setTimeout(async () => {
+    const items = [];
+    for (const off of [1, 2]) {
+      const e = S.eps[idx + off];
+      if (!e || e.status === "skipped") continue;
+      items.push({
+        dataset: S.src.kind === "col" ? (e.dataset_key || S.dsKey) : S.dsKey,
+        episode: e.episode_index,
+      });
+    }
+    if (!items.length) return;
+    try { await request("/api/prefetch", "POST", { items }); } catch (_) { /* best effort */ }
+  }, 900);
 }
 
 /* Recompute segment boundaries from marks; segments[i] spans edges[i]..edges[i+1]. */

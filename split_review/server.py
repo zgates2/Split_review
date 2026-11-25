@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 
 from .dataset import DatasetError, V3Dataset
+from .preview import PreviewCache
 from .reviewdb import ReviewDB
 from .split import Exporter, build_segments, common_keyframes, snap_marks
 from . import video
@@ -84,6 +85,17 @@ def create_app(db_path: str = "state/review.db", media_root: str | None = None) 
     db = ReviewDB(db_path)
     preview_root = Path(media_root) if media_root else Path(db_path).parent / "preview"
     preview_root.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_preview(key: str, index: int):
+        row = db.get_dataset(key)
+        if not row:
+            raise DatasetError(f"unknown dataset {key}")
+        ds = _open(row["path"])
+        return ds, ds.episode(index)
+
+    # two background workers pre-transcode the next episodes while the
+    # operator is still watching the current one
+    previews = PreviewCache(_resolve_preview, preview_root)
 
     app = FastAPI(title="G2 Split Review")
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
@@ -197,22 +209,29 @@ def create_app(db_path: str = "state/review.db", media_root: str | None = None) 
     # -------------------------------------------------------------- videos
     @app.get("/api/media/{key}/{index}")
     def media(key: str, index: int, camera: str, request: Request):
-        row = db.get_dataset(key)
-        if not row:
-            raise HTTPException(404, "unknown dataset")
-        ds = _open(row["path"])
-        ep = ds.episode(index)
-        if camera not in ep.videos:
-            raise HTTPException(404, f"no camera {camera}")
-        ref = ep.videos[camera]
-        src = ds.video_file(ref)
-        out = preview_root / key / f"ep{index:04d}_{camera.replace('.', '_')}.mp4"
-        if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
-            out.parent.mkdir(parents=True, exist_ok=True)
-            tmp = out.with_suffix(".tmp.mp4")
-            video.make_preview(src, ref.from_ts, ref.to_ts, tmp)
-            tmp.replace(out)
-        return _range_response(out, request)
+        try:
+            path = previews.ensure(key, index, camera)
+        except DatasetError as exc:
+            raise HTTPException(404, str(exc))
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        return _range_response(path, request)
+
+    @app.post("/api/prefetch")
+    def prefetch(body: dict = Body(...)):
+        """Warm the preview cache for upcoming episodes (fire and forget)."""
+        items = body.get("items") or []
+        queued = 0
+        for item in items[:8]:
+            try:
+                queued += previews.enqueue_episode(str(item["dataset"]), int(item["episode"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return {"queued": queued, "status": previews.status()}
+
+    @app.get("/api/prefetch")
+    def prefetch_status():
+        return previews.status()
 
     # --------------------------------------------------------- collections
     @app.get("/api/collections")

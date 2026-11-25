@@ -93,6 +93,17 @@ ssh -L 18770:127.0.0.1:18770 thu_zz
 
 ---
 
+### 预览预生成（切条不等待）
+
+打开第 k 条时前端会自动请求 `POST /api/prefetch`，服务端用 3 个后台线程把 **k+1、k+2** 的三路预览先转好放进 `state/preview/`，等你点「下一条」时直接命中缓存。
+
+实测（108 s、三相机 episode）：冷开 **5.6 s** → 预热后 **0.1 s**；短 episode 冷开 1 s → 预热后 **5 ms**。
+
+- 只写预览缓存，不碰原始数据、不影响导出；
+- 缓存键是 `(数据集, episode, 相机)`，源文件 mtime 变了会自动重建；
+- 占盘约 30 MB/条（三路 720p），`state/preview/` 可随时整目录删掉，下次打开自动重建；
+- 状态查询：`GET /api/prefetch` 返回 `queued / pending / done / failed / dropped`。
+
 ## 4. 导出（每个子任务一个数据集）
 
 ```bash
