@@ -6,6 +6,7 @@ per-camera frame count always matches the number of data rows in the segment.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -128,6 +129,26 @@ def build_segments(
     return segs
 
 
+def _dir_size(root: Path) -> int:
+    total = 0
+    stack = [str(root)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
 class Exporter:
     """Export kept segments from one or more v3 datasets into by-task datasets.
 
@@ -196,6 +217,7 @@ class Exporter:
                 "sources": [str(self.sources[k].root) for k in keys],
             }
 
+        self._preflight(base, jobs)
         base.mkdir(parents=True, exist_ok=True)
         tmp_root = Path(tempfile.mkdtemp(prefix=".cut_", dir=str(base)))
         writers = {t: TaskWriter(out_dirs[t], self.template, t) for t in order}
@@ -240,6 +262,16 @@ class Exporter:
                         "video_offsets_frames": frames["offsets"],
                     }
                 )
+        except BaseException:
+            # Never leave a directory that looks like a dataset but has no meta:
+            # rename it so it cannot be mistaken for a trainable export.
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            failed = base.with_name(base.name + ".failed-" + stamp)
+            try:
+                base.rename(failed)
+            except OSError:
+                pass
+            raise
         finally:
             shutil.rmtree(tmp_root, ignore_errors=True)
 
@@ -266,6 +298,25 @@ class Exporter:
         return self.report
 
     # -------------------------------------------------------------- helpers
+    def _preflight(self, base: Path, jobs: list) -> None:
+        if base.exists() and any(base.iterdir()):
+            raise ValueError(
+                f"输出目录已存在且非空：{base}\n换一个目录名，或先把它删掉再导出。"
+            )
+        need = sum(_dir_size(ds.root) for ds in self.sources.values())
+        need = int(need * 1.05)  # every segment may carry up to one extra GOP
+        probe = base
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        free = shutil.disk_usage(probe).free
+        self.report["space"] = {"estimated_bytes": need, "free_bytes": free, "probe": str(probe)}
+        if free < need:
+            raise ValueError(
+                f"输出磁盘空间不足：这次导出预计需要约 {need / 1e9:.0f} GB，"
+                f"{probe} 只剩 {free / 1e9:.0f} GB。\n"
+                f"请把「输出到」换成空间更大的目录（例如 /home/...），或先清理磁盘。"
+            )
+
     @staticmethod
     def _slice_rows(ds: V3Dataset, ep: Episode, seg: dict):
         rows = ds.episode_rows(ep)
