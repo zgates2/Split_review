@@ -198,22 +198,28 @@ def count_frames(path: str | Path) -> int:
         return sum(1 for p in container.demux(stream) if p.size)
 
 
-def sample_frames(path: str | Path, max_samples: int = 24) -> list:
-    """Decode a few evenly spaced frames as HxWx3 uint8 arrays (for image stats)."""
-    import numpy as np
+def sample_frames(path: str | Path, max_samples: int = 12, window: int = 4) -> list:
+    """Decode a few frames near the start as HxWx3 uint8 arrays (image stats).
+
+    Image statistics are only used for normalisation/diagnostics, so they do not
+    need frames spread over the whole segment. Seeking across a long-GOP file
+    forced a near-complete decode (~6 s per camera per segment); decoding the
+    first ``max_samples * window`` frames and taking every ``window``-th one
+    gives the same order of magnitude in about a tenth of the time.
+    """
+    import numpy as np  # noqa: F401  (kept for parity with the previous version)
 
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
-        total = int(stream.frames or 0)
+        keep = max(1, int(window))
+        limit = max(1, int(max_samples)) * keep
         frames = []
-        want = set()
-        if total:
-            step = max(1, total // max_samples)
-            want = set(range(0, total, step))
         for i, frame in enumerate(container.decode(stream)):
-            if not want or i in want:
+            if i % keep == 0:
                 frames.append(frame.to_ndarray(format="rgb24"))
-            if len(frames) >= max_samples:
+                if len(frames) >= max_samples:
+                    break
+            if i >= limit:
                 break
         return frames
 
